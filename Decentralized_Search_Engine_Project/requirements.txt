@@ -1,0 +1,13 @@
+nltk
+numpy
+spacy
+redis
+web3
+bcrypt
+cryptography
+asyncio
+elasticsearch
+aiohttp
+beautifulsoup4
+lxml
+scrapy
