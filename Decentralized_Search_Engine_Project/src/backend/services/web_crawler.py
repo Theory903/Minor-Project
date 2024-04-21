@@ -1,50 +1,87 @@
-from robobrowser import RoboBrowser
-from whoosh.index import create_in
-from whoosh.fields import Schema, TEXT, ID
-from whoosh.qparser import QueryParser
-import os
-browser = RoboBrowser(parser='lxml', history=True)
+import requests
+from bs4 import BeautifulSoup
+from urllib.parse import urlparse, urljoin
+from collections import deque, defaultdict
+import logging
+import re
+from nltk.tokenize import word_tokenize
+from nltk.corpus import stopwords
 
-# Define the schema for the index
-schema = Schema(title=TEXT(stored=True), content=TEXT)
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Create the index in memory (you can also create it on disk)
-index_dir = "/Users/theory903/Documents/WORK/PROJECT/Search Engine/index"
+# Allowed protocols
+allowed_protocols = ['http', 'https']
 
-# Create the directory if it doesn't exist
-if not os.path.exists(index_dir):
-    os.makedirs(index_dir)
+# URLs to crawl
+unprocessed_urls = deque(["https://www.example.com"])
 
-# Create the index
-index = create_in(index_dir, schema)
-# Initialize RoboBrowser
-browser = RoboBrowser()
+# Processed URLs
+processed_urls = set()
 
-# Define a function to crawl a website and index its content
-def crawl_and_index(url):
-    browser.open(url)
-    title = browser.select('title')[0].text.strip()
-    content = '\n'.join([p.text.strip() for p in browser.select('p')])
-    
-    # Add the content to the index
-    writer = index.writer()
-    writer.add_document(title=title, content=content)
-    writer.commit()
+# Inverted index
+inverted_index = defaultdict(list)
 
-# Crawl and index a sample website
-crawl_and_index("https://example.com")
+# Stopwords
+stop_words = set(stopwords.words('english'))
 
-# Implement search functionality
+while unprocessed_urls:
+    url = unprocessed_urls.popleft()
+
+    # Check if the URL has already been processed
+    if url in processed_urls:
+        continue
+
+    try:
+        # Parse the URL and check if the protocol is allowed
+        parsed_url = urlparse(url)
+        if parsed_url.scheme not in allowed_protocols:
+            logging.warning(f"Skipping {url} due to unsupported protocol")
+            continue
+
+        # Fetch the URL
+        response = requests.get(url)
+        response.raise_for_status()
+
+        # Parse the HTML content
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        # Extract text content and tokenize
+        text = soup.get_text()
+        tokens = word_tokenize(text.lower())
+        filtered_tokens = [token for token in tokens if token not in stop_words and re.match(r'^\w+$', token)]
+
+        # Update the inverted index
+        for token in filtered_tokens:
+            inverted_index[token].append(url)
+
+        # Extract links and add to the unprocessed URLs
+        links = [urljoin(url, link.get("href")) for link in soup.find_all("a")]
+        for link in links:
+            if link not in processed_urls and link not in unprocessed_urls:
+                unprocessed_urls.append(link)
+
+        # Mark the URL as processed
+        processed_urls.add(url)
+
+    except requests.exceptions.RequestException as e:
+        logging.warning(f"Error processing {url}: {e}")
+        continue
+
+# Search function
 def search(query):
-    with index.searcher() as searcher:
-        query_parser = QueryParser("content", index.schema)
-        parsed_query = query_parser.parse(query)
-        results = searcher.search(parsed_query)
-        for result in results:
-            print("Title:", result['title'])
-            print("Content:", result['content'])
-            print()
+    query_tokens = word_tokenize(query.lower())
+    query_tokens = [token for token in query_tokens if token not in stop_words and re.match(r'^\w+$', token)]
 
-# Perform a sample search
-search("example")
+    relevant_urls = set()
+    for token in query_tokens:
+        relevant_urls.update(inverted_index[token])
 
+    return list(relevant_urls)
+
+# Example usage
+query = "example search query"
+results = search(query)
+print(f"Search results for '{query}':")
+for result in results:
+    print(result)
