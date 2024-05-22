@@ -1,87 +1,75 @@
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import urlparse, urljoin
-from collections import deque, defaultdict
-import logging
-import re
-from nltk.tokenize import word_tokenize
-from nltk.corpus import stopwords
+from urllib.parse import urljoin, urlparse
+from urllib import robotparser
+import queue
+import time
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+class Crawler:
+    def __init__(self, seed_url, limit=10, delay=5, user_agent='Mozilla/5.0'):
+        self.seed_url = seed_url
+        self.url_queue = queue.Queue()
+        self.seen_urls = set()
+        self.url_queue.put(seed_url)
+        self.limit = limit
+        self.crawled_count = 0  
+        self.delay = delay
+        self.user_agent = user_agent
+        self.robots = {}
 
-# Allowed protocols
-allowed_protocols = ['http', 'https']
+    def crawl(self):
+        while not self.url_queue.empty() and self.crawled_count < self.limit:  
+            url = self.url_queue.get()
+            if url in self.seen_urls:
+                continue
+            self.seen_urls.add(url)
+            try:
+                html = self.fetch_html(url)
+                if html:
+                    self.parse_and_enqueue(url, html)
+                    self.crawled_count += 1  
+            except requests.exceptions.RequestException as e:
+                print(f"Error crawling {url}: {e}")
+            time.sleep(self.delay)  
 
-# URLs to crawl
-unprocessed_urls = deque(["https://www.example.com"])
+    def fetch_html(self, url):
+        try:
+            response = requests.get(url, headers={'User-Agent': self.user_agent}, timeout=10)
+            response.raise_for_status()  
+            return response.text
+        except requests.exceptions.RequestException as e:
+            print(f"Error fetching {url}: {e}")
+            return None
 
-# Processed URLs
-processed_urls = set()
+    def parse_and_enqueue(self, url, html):
+        soup = BeautifulSoup(html, 'html.parser')
+        domain = urlparse(url).netloc
+        self.respect_robots_txt(domain)
+        for link in soup.find_all('a'):
+            link_url = link.get('href')
+            if link_url and link_url.startswith('http'):
+                absolute_url = urljoin(url, link_url)
+                if self.is_allowed(absolute_url, domain) and absolute_url not in self.seen_urls:  
+                    self.url_queue.put(absolute_url)
+        print(f"Crawled: {url}")
 
-# Inverted index
-inverted_index = defaultdict(list)
+    def respect_robots_txt(self, domain):
+        if domain not in self.robots:
+            robots_url = urljoin(self.seed_url, '/robots.txt')
+            rp = robotparser.RobotFileParser()
+            rp.set_url(robots_url)
+            rp.read()
+            self.robots[domain] = rp
 
-# Stopwords
-stop_words = set(stopwords.words('english'))
+    def is_allowed(self, url, domain):
+        rp = self.robots[domain]
+        return rp.can_fetch(self.user_agent, url)
 
-while unprocessed_urls:
-    url = unprocessed_urls.popleft()
+# Define seed URL
+seed_url = "https://www.example.com"
 
-    # Check if the URL has already been processed
-    if url in processed_urls:
-        continue
+# Create crawler instance
+crawler = Crawler(seed_url, limit=10)
 
-    try:
-        # Parse the URL and check if the protocol is allowed
-        parsed_url = urlparse(url)
-        if parsed_url.scheme not in allowed_protocols:
-            logging.warning(f"Skipping {url} due to unsupported protocol")
-            continue
-
-        # Fetch the URL
-        response = requests.get(url)
-        response.raise_for_status()
-
-        # Parse the HTML content
-        soup = BeautifulSoup(response.text, "html.parser")
-
-        # Extract text content and tokenize
-        text = soup.get_text()
-        tokens = word_tokenize(text.lower())
-        filtered_tokens = [token for token in tokens if token not in stop_words and re.match(r'^\w+$', token)]
-
-        # Update the inverted index
-        for token in filtered_tokens:
-            inverted_index[token].append(url)
-
-        # Extract links and add to the unprocessed URLs
-        links = [urljoin(url, link.get("href")) for link in soup.find_all("a")]
-        for link in links:
-            if link not in processed_urls and link not in unprocessed_urls:
-                unprocessed_urls.append(link)
-
-        # Mark the URL as processed
-        processed_urls.add(url)
-
-    except requests.exceptions.RequestException as e:
-        logging.warning(f"Error processing {url}: {e}")
-        continue
-
-# Search function
-def search(query):
-    query_tokens = word_tokenize(query.lower())
-    query_tokens = [token for token in query_tokens if token not in stop_words and re.match(r'^\w+$', token)]
-
-    relevant_urls = set()
-    for token in query_tokens:
-        relevant_urls.update(inverted_index[token])
-
-    return list(relevant_urls)
-
-# Example usage
-query = "example search query"
-results = search(query)
-print(f"Search results for '{query}':")
-for result in results:
-    print(result)
+# Start crawling
+crawler.crawl()

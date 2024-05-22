@@ -1,6 +1,6 @@
 from elasticsearch import Elasticsearch
 from scrapy.crawler import CrawlerProcess
-from web_crawler import MySpider  # Replace mymodule with the module containing your spider
+from web_crawler import Crawler  # Replace mymodule with the module containing your spider
 
 def index_to_elasticsearch(items):
     # Initialize Elasticsearch client with proper URL scheme
@@ -16,7 +16,7 @@ def run_crawler():
         'FEED_FORMAT': 'json',
         'FEED_URI': 'output.json'
     })
-    process.crawl(MySpider)
+    process.crawl(Crawler)
     process.start()
 
     # Read crawled data from the output file
